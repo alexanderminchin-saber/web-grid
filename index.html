@@ -52,10 +52,12 @@
         const Monitor = (props) => <Icon {...props}><rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" /></Icon>;
         const LayoutIcon = (props) => <Icon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M9 21V9" /></Icon>;
         const MenuIcon = (props) => <Icon {...props}><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></Icon>;
+        const SaveIcon = (props) => <Icon {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></Icon>;
 
         // --- Constants ---
         const GRID_SIZE = 20;
-        const STORAGE_KEY = 'dashboard_layout_v4';
+        const SESSION_KEY = 'dashboard_last_session';
+        const COLLECTIONS_KEY = 'dashboard_saved_collections';
         const DEFAULT_W = 400;
         const DEFAULT_H = 300;
 
@@ -68,22 +70,102 @@
             const [isHeaderVisible, setIsHeaderVisible] = useState(true);
             const [compactMode, setCompactMode] = useState(false);
             const [dragState, setDragState] = useState(null); 
+            
+            // Stored Layouts State
+            const [savedCollections, setSavedCollections] = useState({});
+            const [activeCollectionName, setActiveCollectionName] = useState('');
+            
             const isInteracting = !!dragState;
             const mainRef = useRef(null);
 
+            // 1. Initial Load
             useEffect(() => {
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) {
+                // Load last session
+                const lastSession = localStorage.getItem(SESSION_KEY);
+                if (lastSession) {
                     try {
-                        const parsed = JSON.parse(saved);
+                        const parsed = JSON.parse(lastSession);
                         if (Array.isArray(parsed)) setPanes(parsed);
+                    } catch (e) {}
+                }
+
+                // Load named collections
+                const collections = localStorage.getItem(COLLECTIONS_KEY);
+                if (collections) {
+                    try {
+                        setSavedCollections(JSON.parse(collections));
                     } catch (e) {}
                 }
             }, []);
 
+            // 2. Auto-save session
             useEffect(() => {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(panes));
+                localStorage.setItem(SESSION_KEY, JSON.stringify(panes));
             }, [panes]);
+
+            // --- Storage Actions ---
+
+            const saveCurrentLayout = () => {
+                const name = prompt("Enter a name for this dashboard layout:", activeCollectionName || "My Dashboard");
+                if (!name || name.trim() === "") return;
+                
+                const updated = { ...savedCollections, [name]: panes };
+                setSavedCollections(updated);
+                localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(updated));
+                setActiveCollectionName(name);
+            };
+
+            const loadCollection = (name) => {
+                if (!name) return;
+                if (savedCollections[name]) {
+                    setPanes(savedCollections[name]);
+                    setActiveCollectionName(name);
+                }
+            };
+
+            const deleteCollection = () => {
+                if (!activeCollectionName) return;
+                if (confirm(`Delete the saved layout "${activeCollectionName}"?`)) {
+                    const updated = { ...savedCollections };
+                    delete updated[activeCollectionName];
+                    setSavedCollections(updated);
+                    localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(updated));
+                    setActiveCollectionName('');
+                }
+            };
+
+            // --- JSON Import/Export ---
+
+            const exportToJson = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(panes));
+                const link = document.createElement('a');
+                link.setAttribute("href", dataStr);
+                link.setAttribute("download", `${activeCollectionName || 'dashboard'}_layout.json`);
+                link.click();
+            };
+
+            const importFromJson = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const imported = JSON.parse(event.target.result);
+                        if (Array.isArray(imported)) {
+                            setPanes(imported);
+                            setActiveCollectionName(''); // Clear active name as it's a new import
+                        } else {
+                            alert('Invalid layout file format.');
+                        }
+                    } catch (err) {
+                        alert('Error parsing JSON file.');
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = ''; // Reset input
+            };
+
+            // --- Pane Management ---
 
             const findOpenSpot = (width, height) => {
                 if (panes.length === 0) return { x: 20, y: 20 };
@@ -136,37 +218,60 @@
                 return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
             }, [dragState]);
 
-            const exportLayout = () => {
-                const data = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(panes));
-                const link = document.createElement('a');
-                link.setAttribute("href", data); link.setAttribute("download", "dashboard.json");
-                link.click();
-            };
-
             return (
-                <div className="h-screen w-screen overflow-hidden flex flex-col relative">
+                <div className="h-screen w-screen overflow-hidden flex flex-col relative bg-slate-950">
                     <div className="absolute inset-0 pointer-events-none opacity-5" style={{ backgroundImage: `linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)`, backgroundSize: '20px 20px' }} />
 
                     {/* Toolbar */}
                     <header className={`z-50 bg-slate-900 border-b border-slate-800 transition-all duration-300 ${isHeaderVisible ? 'h-16 opacity-100' : 'h-0 opacity-0 overflow-hidden'}`}>
-                        <div className="p-3 flex items-center justify-between gap-4">
+                        <div className="p-3 flex items-center justify-between gap-4 h-full">
                             <div className="flex items-center gap-2">
                                 <GridIcon size={20} className="text-indigo-500" />
-                                <span className="font-bold text-sm hidden sm:block">GridBoard</span>
+                                <span className="font-bold text-sm hidden lg:block">GridBoard</span>
                             </div>
-                            <form onSubmit={addPane} className="flex-1 max-w-md flex gap-2">
-                                <input type="text" placeholder="URL..." className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1 text-sm outline-none focus:border-indigo-500" value={urlInput} onChange={e => setUrlInput(e.target.value)} />
-                                <button type="submit" className="bg-indigo-600 px-3 py-1 rounded text-sm font-bold hover:bg-indigo-500"><Plus size={16}/></button>
+                            
+                            <form onSubmit={addPane} className="flex-1 max-w-sm flex gap-2">
+                                <input type="text" placeholder="Add URL..." className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1 text-sm outline-none focus:border-indigo-500 text-white" value={urlInput} onChange={e => setUrlInput(e.target.value)} />
+                                <button type="submit" className="bg-indigo-600 px-3 py-1 rounded text-sm font-bold hover:bg-indigo-500 shrink-0"><Plus size={16}/></button>
                             </form>
-                            <div className="flex items-center gap-2">
-                                <button onClick={() => setCompactMode(!compactMode)} className={`p-2 rounded hover:bg-slate-800 ${compactMode ? 'text-indigo-400' : 'text-slate-400'}`} title="Compact Mode">{compactMode ? <Monitor size={18}/> : <LayoutIcon size={18}/>}</button>
-                                <button onClick={exportLayout} className="p-2 text-slate-400 hover:text-white"><Download size={18}/></button>
-                                <button onClick={() => setIsHeaderVisible(false)} className="p-2 text-slate-400 hover:text-white"><ChevronUp size={18}/></button>
+
+                            {/* Storage Management */}
+                            <div className="flex items-center gap-1 border-l border-slate-700 pl-4">
+                                <select 
+                                    className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-indigo-500 max-w-[150px]"
+                                    value={activeCollectionName}
+                                    onChange={(e) => loadCollection(e.target.value)}
+                                >
+                                    <option value="">Stored Layouts...</option>
+                                    {Object.keys(savedCollections).map(name => (
+                                        <option key={name} value={name}>{name}</option>
+                                    ))}
+                                </select>
+                                
+                                <button onClick={saveCurrentLayout} className="p-2 text-slate-400 hover:text-indigo-400 transition-colors" title="Save Current Layout As..."><SaveIcon size={18}/></button>
+                                
+                                {activeCollectionName && (
+                                    <button onClick={deleteCollection} className="p-2 text-slate-400 hover:text-red-400 transition-colors" title="Delete current layout"><Trash2 size={18}/></button>
+                                )}
+                            </div>
+
+                            {/* Options & Import/Export */}
+                            <div className="flex items-center gap-1 border-l border-slate-700 pl-4">
+                                <button onClick={() => setCompactMode(!compactMode)} className={`p-2 rounded hover:bg-slate-800 transition-colors ${compactMode ? 'text-indigo-400' : 'text-slate-400'}`} title="Compact Mode">{compactMode ? <Monitor size={18}/> : <LayoutIcon size={18}/>}</button>
+                                
+                                <label className="p-2 text-slate-400 hover:text-white cursor-pointer transition-colors" title="Import JSON">
+                                    <Upload size={18}/>
+                                    <input type="file" accept=".json" onChange={importFromJson} className="hidden" />
+                                </label>
+                                
+                                <button onClick={exportToJson} className="p-2 text-slate-400 hover:text-white transition-colors" title="Export current session to JSON"><Download size={18}/></button>
+                                
+                                <button onClick={() => setIsHeaderVisible(false)} className="p-2 text-slate-400 hover:text-white transition-colors" title="Hide Toolbar"><ChevronUp size={18}/></button>
                             </div>
                         </div>
                     </header>
 
-                    {/* Discrete Menu Toggle */}
+                    {/* Floating Menu Toggle */}
                     {!isHeaderVisible && (
                         <button 
                             onClick={() => setIsHeaderVisible(true)}
@@ -178,18 +283,31 @@
                     )}
 
                     <main ref={mainRef} className="flex-1 relative overflow-auto">
+                        {panes.length === 0 && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 pointer-events-none select-none opacity-40">
+                                <GridIcon size={64} className="mb-4" />
+                                <p className="text-lg font-medium">Dashboard Empty</p>
+                                <p className="text-sm">Enter a URL above to add a window</p>
+                            </div>
+                        )}
+                        
                         {panes.map(p => (
-                            <div key={p.id} className={`absolute flex flex-col bg-slate-900 rounded-lg shadow-2xl overflow-hidden border border-slate-700 ${dragState?.id === p.id ? 'ring-2 ring-indigo-500' : ''}`} style={{ width: p.w, height: p.h, transform: `translate(${p.x}px, ${p.y}px)`, zIndex: p.zIndex }} onMouseDown={() => bringToFront(p.id)}>
+                            <div key={p.id} className={`absolute flex flex-col bg-slate-900 rounded-lg shadow-2xl overflow-hidden border border-slate-700 transition-shadow ${dragState?.id === p.id ? 'ring-2 ring-indigo-500 shadow-indigo-500/20' : ''}`} style={{ width: p.w, height: p.h, transform: `translate(${p.x}px, ${p.y}px)`, zIndex: p.zIndex }} onMouseDown={() => bringToFront(p.id)}>
+                                {/* Pane Header */}
                                 <div className={`flex items-center justify-between px-2 cursor-move bg-slate-800 border-b border-slate-700 ${compactMode ? 'absolute top-0 left-0 right-0 z-10 h-8 opacity-0 hover:opacity-100 transition-opacity bg-slate-900/90' : 'h-8'}`} onMouseDown={e => handleMouseDown(e, p.id, 'MOVE')}>
-                                    <span className="text-[10px] text-slate-400 truncate font-mono">{p.url}</span>
-                                    <button onClick={() => setPanes(panes.filter(x => x.id !== p.id))} className="text-slate-500 hover:text-red-400"><X size={14}/></button>
+                                    <span className="text-[10px] text-slate-400 truncate font-mono select-none">{p.url}</span>
+                                    <button onClick={() => setPanes(panes.filter(x => x.id !== p.id))} className="text-slate-500 hover:text-red-400 p-1"><X size={14}/></button>
                                 </div>
+                                
+                                {/* Iframe */}
                                 <div className="flex-1 relative bg-white">
-                                    {isInteracting && <div className="absolute inset-0 z-20" />}
+                                    {isInteracting && <div className="absolute inset-0 z-20 bg-transparent" />}
                                     <iframe src={p.url} className="w-full h-full border-0" />
                                 </div>
-                                <div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-30" onMouseDown={e => handleMouseDown(e, p.id, 'RESIZE')}>
-                                    <Maximize2 size={10} className="text-slate-500 absolute bottom-1 right-1 rotate-90" />
+                                
+                                {/* Resize Handle */}
+                                <div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-30 group" onMouseDown={e => handleMouseDown(e, p.id, 'RESIZE')}>
+                                    <Maximize2 size={10} className="text-slate-500 group-hover:text-indigo-400 absolute bottom-1 right-1 rotate-90" />
                                 </div>
                             </div>
                         ))}
