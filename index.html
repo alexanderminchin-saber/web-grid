@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GridBoard</title>
+    
+    <!-- Tailwind CSS (Styling) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (To compile JSX in the browser) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide-react/dist/umd/lucide-react.min.js"></script>
+
+    <style>
+        /* Custom scrollbar for a cleaner look */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        // Lucide icons are exposed globally via the window.LucideReact object in UMD
+        const { 
+            Plus, X, Move, Save, Upload, Download, Globe, Trash2, 
+            Maximize2, Grid, AlertCircle, ChevronUp, ChevronDown, 
+            Monitor, Layout 
+        } = window.LucideReact;
+
+        // --- Constants ---
+        const GRID_SIZE = 20;
+        const STORAGE_KEY = 'dashboard_layout_v3_singlefile';
+        const DEFAULT_W = 400;
+        const DEFAULT_H = 300;
+
+        // --- Helper Functions ---
+        const snap = (value) => Math.round(value / GRID_SIZE) * GRID_SIZE;
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+
+        function App() {
+            const [panes, setPanes] = useState([]);
+            const [urlInput, setUrlInput] = useState('');
+            
+            // View Preferences
+            const [isHeaderVisible, setIsHeaderVisible] = useState(true);
+            const [compactMode, setCompactMode] = useState(false);
+            const [showMinimizeHint, setShowMinimizeHint] = useState(false);
+
+            // Drag/Resize State
+            const [dragState, setDragState] = useState(null); 
+            const isInteracting = !!dragState;
+
+            const mainRef = useRef(null);
+
+            // --- Persistence ---
+            useEffect(() => {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    try {
+                        const parsed = JSON.parse(saved);
+                        if (Array.isArray(parsed)) setPanes(parsed);
+                    } catch (e) {
+                        console.error("Failed to load dashboard", e);
+                    }
+                }
+            }, []);
+
+            useEffect(() => {
+                if (panes.length > 0) {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(panes));
+                }
+            }, [panes]);
+
+            // --- Keyboard Shortcuts ---
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+                        e.preventDefault();
+                        setIsHeaderVisible(prev => !prev);
+                    }
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, []);
+
+            const hideHeader = () => {
+                setIsHeaderVisible(false);
+                setShowMinimizeHint(true);
+                setTimeout(() => setShowMinimizeHint(false), 3000);
+            };
+
+            // --- Layout Logic ---
+            const findOpenSpot = (width, height) => {
+                if (panes.length === 0) return { x: 20, y: 20 };
+
+                const canvasWidth = mainRef.current ? mainRef.current.clientWidth : window.innerWidth;
+                const step = GRID_SIZE;
+                let checkX = 20;
+                let checkY = 20;
+                let found = false;
+                let attempts = 0;
+
+                while (!found && attempts < 2000) {
+                    const hasCollision = panes.some(p => {
+                        return (
+                            checkX < p.x + p.w &&
+                            checkX + width > p.x &&
+                            checkY < p.y + p.h &&
+                            checkY + height > p.y
+                        );
+                    });
+
+                    if (!hasCollision) {
+                        found = true;
+                    } else {
+                        checkX += step;
+                        if (checkX + width > canvasWidth) {
+                            checkX = 20;
+                            checkY += step;
+                        }
+                    }
+                    attempts++;
+                }
+                return { x: checkX, y: checkY };
+            };
+
+            // --- Handlers ---
+            const addPane = (e) => {
+                e.preventDefault();
+                if (!urlInput.trim()) return;
+
+                let finalUrl = urlInput;
+                if (!/^https?:\/\//i.test(finalUrl)) {
+                    finalUrl = 'https://' + finalUrl;
+                }
+
+                const { x, y } = findOpenSpot(DEFAULT_W, DEFAULT_H);
+
+                const newPane = {
+                    id: generateId(),
+                    url: finalUrl,
+                    x,
+                    y,
+                    w: DEFAULT_W,
+                    h: DEFAULT_H,
+                    zIndex: panes.length + 1,
+                };
+
+                setPanes([...panes, newPane]);
+                setUrlInput('');
+            };
+
+            const removePane = (id) => {
+                setPanes(panes.filter(p => p.id !== id));
+            };
+
+            const bringToFront = (id) => {
+                const maxZ = Math.max(...panes.map(p => p.zIndex || 0), 0);
+                setPanes(panes.map(p => p.id === id ? { ...p, zIndex: maxZ + 1 } : p));
+            };
+
+            const handleMouseDown = (e, id, type) => {
+                e.preventDefault(); 
+                e.stopPropagation();
+                
+                const pane = panes.find(p => p.id === id);
+                if (!pane) return;
+
+                bringToFront(id);
+
+                setDragState({
+                    type,
+                    id,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    initX: pane.x,
+                    initY: pane.y,
+                    initW: pane.w,
+                    initH: pane.h,
+                });
+            };
+
+            useEffect(() => {
+                const handleMouseMove = (e) => {
+                    if (!dragState) return;
+
+                    const deltaX = e.clientX - dragState.startX;
+                    const deltaY = e.clientY - dragState.startY;
+
+                    setPanes(prev => prev.map(p => {
+                        if (p.id !== dragState.id) return p;
+
+                        if (dragState.type === 'MOVE') {
+                            const rawX = dragState.initX + deltaX;
+                            const rawY = dragState.initY + deltaY;
+                            return {
+                                ...p,
+                                x: Math.max(0, snap(rawX)),
+                                y: Math.max(0, snap(rawY))
+                            };
+                        } else if (dragState.type === 'RESIZE') {
+                            const rawW = dragState.initW + deltaX;
+                            const rawH = dragState.initH + deltaY;
+                            return {
+                                ...p,
+                                w: Math.max(GRID_SIZE * 5, snap(rawW)), 
+                                h: Math.max(GRID_SIZE * 5, snap(rawH)) 
+                            };
+                        }
+                        return p;
+                    }));
+                };
+
+                const handleMouseUp = () => {
+                    setDragState(null);
+                };
+
+                if (dragState) {
+                    window.addEventListener('mousemove', handleMouseMove);
+                    window.addEventListener('mouseup', handleMouseUp);
+                }
+
+                return () => {
+                    window.removeEventListener('mousemove', handleMouseMove);
+                    window.removeEventListener('mouseup', handleMouseUp);
+                };
+            }, [dragState]);
+
+            const exportLayout = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(panes));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "dashboard_layout.json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            };
+
+            const importLayout = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const imported = JSON.parse(event.target.result);
+                        if (Array.isArray(imported)) {
+                            setPanes(imported);
+                        } else {
+                            alert('Invalid layout file');
+                        }
+                    } catch (err) {
+                        alert('Error parsing JSON');
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            return (
+                <div className="min-h-screen overflow-hidden flex flex-col font-sans">
+                
+                    {/* Background Grid */}
+                    <div 
+                        className="absolute inset-0 pointer-events-none opacity-5"
+                        style={{
+                            backgroundImage: `linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px)`,
+                            backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`
+                        }}
+                    />
+
+                    {/* Hint Toast for Shortcut */}
+                    {showMinimizeHint && (
+                        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-slate-200 px-4 py-2 rounded-full shadow-2xl border border-slate-600 transition-all animate-bounce pointer-events-none">
+                            <p className="text-xs font-medium">Tip: Press <span className="bg-slate-700 px-1.5 py-0.5 rounded text-white font-mono mx-1">Ctrl + \</span> to toggle toolbar</p>
+                        </div>
+                    )}
+
+                    {/* Main Toolbar */}
+                    <div 
+                        className={`relative z-50 bg-slate-900 border-b border-slate-800 shadow-xl transition-all duration-300 ease-in-out ${
+                            isHeaderVisible ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 h-0 overflow-hidden'
+                        }`}
+                    >
+                        <div className="p-4 flex flex-wrap gap-4 items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="p-2 bg-indigo-600 rounded-lg">
+                                    <Grid size={24} />
+                                </div>
+                                <h1 className="text-xl font-bold hidden md:block">GridBoard</h1>
+                            </div>
+
+                            <form onSubmit={addPane} className="flex-1 max-w-xl flex gap-2">
+                                <div className="relative flex-1">
+                                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Enter URL (e.g. wikipedia.org)" 
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-md py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white"
+                                        value={urlInput}
+                                        onChange={(e) => setUrlInput(e.target.value)}
+                                    />
+                                </div>
+                                <button 
+                                    type="submit"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors whitespace-nowrap"
+                                >
+                                    <Plus size={16} /> <span className="hidden sm:inline">Add Pane</span>
+                                </button>
+                            </form>
+
+                            <div className="flex items-center gap-2 border-l border-slate-700 pl-4">
+                                <button 
+                                    onClick={() => setCompactMode(!compactMode)}
+                                    className={`p-2 rounded-md transition-colors ${compactMode ? 'bg-indigo-900/50 text-indigo-300' : 'hover:bg-slate-800 text-slate-400'}`}
+                                    title={compactMode ? "Show Headers" : "Compact Mode (Auto-hide Headers)"}
+                                >
+                                    {compactMode ? <Monitor size={20} /> : <Layout size={20} />}
+                                </button>
+
+                                <button 
+                                    onClick={exportLayout}
+                                    className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors"
+                                    title="Export Layout"
+                                >
+                                    <Download size={20} />
+                                </button>
+                                <label className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors cursor-pointer" title="Import Layout">
+                                    <Upload size={20} />
+                                    <input type="file" accept=".json" onChange={importLayout} className="hidden" />
+                                </label>
+                                <button 
+                                    onClick={() => setPanes([])}
+                                    className="p-2 hover:bg-red-900/30 rounded-md text-slate-400 hover:text-red-400 transition-colors"
+                                    title="Clear All"
+                                >
+                                    <Trash2 size={20} />
+                                </button>
+                                
+                                <button
+                                    onClick={hideHeader}
+                                    className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors"
+                                    title="Collapse Toolbar (Ctrl + \)"
+                                >
+                                    <ChevronUp size={20} />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Collapsed Header Toggle */}
+                    {!isHeaderVisible && (
+                        <div className="absolute top-0 left-0 right-0 h-4 z-50 flex justify-center group pointer-events-none">
+                            <button 
+                                onClick={() => setIsHeaderVisible(true)}
+                                title="Toggle Toolbar (Ctrl + \)"
+                                className="pointer-events-auto bg-slate-800 border-b border-x border-slate-700 text-slate-400 hover:text-white hover:bg-slate-700 px-6 py-1 rounded-b-lg shadow-lg translate-y-[-100%] group-hover:translate-y-0 transition-transform duration-200 flex items-center gap-1"
+                            >
+                                <ChevronDown size={16} /> <span className="text-xs font-bold">Menu</span>
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Canvas Area */}
+                    <main ref={mainRef} className="relative flex-1 overflow-auto">
+                        
+                        {panes.length === 0 && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 pointer-events-none select-none">
+                                <Grid size={64} className="mb-4 opacity-20" />
+                                <p className="text-lg font-medium">Dashboard Empty</p>
+                                <p className="text-sm opacity-60">Add a URL to get started.</p>
+                            </div>
+                        )}
+
+                        {panes.map((pane) => (
+                            <div
+                                key={pane.id}
+                                className={`absolute flex flex-col bg-slate-900 rounded-lg shadow-2xl overflow-hidden border border-slate-700 transition-shadow ${
+                                    dragState?.id === pane.id ? 'shadow-indigo-500/20 ring-1 ring-indigo-500/50' : ''
+                                }`}
+                                style={{
+                                    width: pane.w,
+                                    height: pane.h,
+                                    transform: `translate(${pane.x}px, ${pane.y}px)`,
+                                    zIndex: pane.zIndex,
+                                }}
+                                onMouseDown={() => bringToFront(pane.id)}
+                            >
+                                {/* Pane Header */}
+                                <div 
+                                    className={`
+                                        flex items-center justify-between px-2 cursor-move select-none group/header bg-slate-800 border-b border-slate-700
+                                        ${compactMode 
+                                            ? 'absolute top-0 left-0 right-0 z-20 h-8 opacity-0 hover:opacity-100 transition-opacity duration-200 bg-slate-900/90 border-slate-700/50 backdrop-blur-sm' 
+                                            : 'h-9 relative'
+                                        }
+                                    `}
+                                    onMouseDown={(e) => handleMouseDown(e, pane.id, 'MOVE')}
+                                >
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <Move size={14} className="text-slate-500" />
+                                        <span className="text-xs text-slate-300 truncate max-w-[200px] font-mono opacity-80" title={pane.url}>
+                                            {pane.url}
+                                        </span>
+                                    </div>
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); removePane(pane.id); }}
+                                        className="p-1 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded transition-colors"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+
+                                {/* Iframe Content */}
+                                <div className={`relative bg-white ${compactMode ? 'w-full h-full' : 'flex-1'}`}>
+                                    {isInteracting && (
+                                        <div className="absolute inset-0 z-50 bg-transparent" />
+                                    )}
+                                    <iframe
+                                        src={pane.url}
+                                        className="w-full h-full border-0"
+                                        title={`Frame ${pane.id}`}
+                                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                                    />
+                                </div>
+
+                                {/* Resize Handle */}
+                                <div 
+                                    className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize flex items-center justify-center z-50 group/resize"
+                                    onMouseDown={(e) => handleMouseDown(e, pane.id, 'RESIZE')}
+                                >
+                                    <Maximize2 size={12} className="text-slate-600 group-hover/resize:text-indigo-400 rotate-90 transition-colors" />
+                                </div>
+                                
+                            </div>
+                        ))}
+
+                        <div className="absolute bottom-4 right-4 bg-slate-800/90 backdrop-blur border border-slate-700 p-3 rounded-lg shadow-xl max-w-xs text-xs text-slate-400 pointer-events-none opacity-40 hover:opacity-100 transition-opacity z-[100]">
+                            <div className="flex items-start gap-2">
+                                <AlertCircle size={14} className="text-indigo-400 shrink-0 mt-0.5" />
+                                <div>
+                                   Sites blocking embeds will show errors.
+                                </div>
+                            </div>
+                        </div>
+
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
